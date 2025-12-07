@@ -84,13 +84,19 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
   const reloadGatewayRef = useRef<() => Promise<void>>(async () => {});
   const autoSaveTimer = useRef<number | null>(null);
 
-  const buildConfigPayload = () => {
+  const buildConfigPayload = (forPersistence = false) => {
+    // 收集所有被服务关联的提供商ID
+    const linkedUpstreamIds = new Set<string>();
+    Object.values(routes).forEach((links) => {
+      links.forEach((link) => linkedUpstreamIds.add(link.upstreamId));
+    });
+
     const payloadServices = services
-      .filter((s) => s.enabled)
+      .filter((s) => forPersistence || s.enabled)
       .map((svc) => {
         const serviceLinks = resequenceLinks(routes[svc.id] ?? []);
         const upstreamEntries = serviceLinks
-          .filter((link) => link.enabled)
+          .filter((link) => forPersistence || link.enabled)
           .map((link) => {
             const upstream = upstreams.find((u) => u.id === link.upstreamId);
             if (!upstream) return null;
@@ -119,10 +125,38 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
           enabled: svc.enabled,
           upstreams: upstreamEntries,
         };
-      })
-      .filter((svc) => (svc.upstreams?.length ?? 0) > 0);
+      });
 
-    if (payloadServices.length === 0) {
+    // 持久化时：收集未被任何服务关联的提供商，放入一个特殊的占位服务中
+    if (forPersistence) {
+      const unlinkedUpstreams = upstreams
+        .filter((u) => !linkedUpstreamIds.has(u.id))
+        .map((u, idx) => ({
+          id: u.id,
+          label: u.label.trim() || null,
+          upstreamBase: u.upstreamBase.trim(),
+          apiKey: u.apiKey.trim() || null,
+          priority: idx,
+          enabled: u.enabled,
+        }))
+        .filter((u) => u.upstreamBase);
+
+      if (unlinkedUpstreams.length > 0) {
+        payloadServices.push({
+          id: "__unlinked__",
+          name: "__unlinked__",
+          basePath: "/__unlinked__",
+          enabled: false,
+          upstreams: unlinkedUpstreams,
+        });
+      }
+    }
+
+    const activeServices = payloadServices.filter(
+      (svc) => svc.enabled && (svc.upstreams?.length ?? 0) > 0
+    );
+
+    if (!forPersistence && activeServices.length === 0) {
       return null;
     }
 
@@ -131,7 +165,7 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
       globalKey: globalKey.trim() || null,
       proxyUrl: proxyUrl.trim() || null,
       fallbackRetries,
-      services: payloadServices,
+      services: forPersistence ? payloadServices : activeServices,
     };
 
     return cfg;
@@ -143,8 +177,12 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     setProxyUrl(cfg.proxyUrl ?? "");
     const persistedFallback = typeof cfg.fallbackRetries === "number" ? cfg.fallbackRetries : 1;
     setFallbackRetries(Math.max(0, Math.min(10, Math.floor(persistedFallback))));
-    
-    const svcList: ServiceConfig[] = cfg.services.map((svc) => ({
+
+    // 过滤掉 __unlinked__ 占位服务
+    const realServices = cfg.services.filter((svc) => svc.id !== "__unlinked__");
+    const unlinkedService = cfg.services.find((svc) => svc.id === "__unlinked__");
+
+    const svcList: ServiceConfig[] = realServices.map((svc) => ({
       id: svc.id,
       name: svc.name || "未命名服务",
       basePath: svc.basePath || "/",
@@ -162,7 +200,8 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
       routeMap[svc.id] = [];
     });
 
-    cfg.services.forEach((svc) => {
+    // 从真实服务中提取提供商和路由
+    realServices.forEach((svc) => {
       svc.upstreams.forEach((up) => {
         if (!upstreamMap.has(up.id)) {
           upstreamMap.set(up.id, {
@@ -184,6 +223,21 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
         ];
       });
     });
+
+    // 从 __unlinked__ 占位服务中恢复未关联的提供商
+    if (unlinkedService) {
+      unlinkedService.upstreams.forEach((up) => {
+        if (!upstreamMap.has(up.id)) {
+          upstreamMap.set(up.id, {
+            id: up.id,
+            label: up.label || "未命名提供商",
+            upstreamBase: up.upstreamBase,
+            apiKey: up.apiKey || "",
+            enabled: up.enabled,
+          });
+        }
+      });
+    }
 
     setUpstreams(Array.from(upstreamMap.values()));
     setRoutes(routeMap);
@@ -262,7 +316,7 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     }
 
     autoSaveTimer.current = window.setTimeout(() => {
-      const cfg = buildConfigPayload();
+      const cfg = buildConfigPayload(true);
       if (!cfg) return;
       saveSettingsCmd(cfg).catch((err) => console.error(`自动保存配置失败：${String(err)}`));
     }, 500);
@@ -286,7 +340,8 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      await saveSettingsCmd(cfg);
+      const persistCfg = buildConfigPayload(true);
+      if (persistCfg) await saveSettingsCmd(persistCfg);
       await startProxy(cfg);
       await updateTrayStatus(true, listenPort, 0);
       setIsRunning(true);
@@ -315,7 +370,8 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      await saveSettingsCmd(cfg);
+      const persistCfg = buildConfigPayload(true);
+      if (persistCfg) await saveSettingsCmd(persistCfg);
       await reloadProxy(cfg);
       await updateTrayStatus(true, listenPort, 0);
       setIsRunning(true);
