@@ -42,9 +42,9 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/spoonnotfound/apiflow/releases/latest/download/latest.json"
+        "https://github.com/starsalwaysineyes/apiflow/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4REE2QTg1NDRBNkQzREYKUldUZjA2WkVoV3JhU1BsQ2JwOC9SZitBT1N1RFg0d0hyV1gzSkJFeWNHQVdqR0pVeG5PeXYyTW4K"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4NjM1Q0U5RThERjVENDEKUldSQlhkL282VnhqeUxYZk5BSGwvWEtCQVhUc3EvUVVIRlRUUS95cVlhM2FoalQ3QW1NTklPeUIK"
     }
   }
 }
