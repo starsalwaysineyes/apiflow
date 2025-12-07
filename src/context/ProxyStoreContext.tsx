@@ -100,13 +100,18 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
           .map((link) => {
             const upstream = upstreams.find((u) => u.id === link.upstreamId);
             if (!upstream) return null;
+            // 持久化时：在 label 中编码提供商的 enabled 状态，格式为 "label::enabled"
+            // 运行时：只使用合并后的 enabled 状态
+            const labelForSave = forPersistence
+              ? `${upstream.label.trim() || ""}::${upstream.enabled ? "1" : "0"}`
+              : (upstream.label.trim() || null);
             return {
               id: upstream.id,
-              label: upstream.label.trim() || null,
+              label: labelForSave,
               upstreamBase: upstream.upstreamBase.trim(),
               apiKey: upstream.apiKey.trim() || null,
               priority: link.priority,
-              enabled: upstream.enabled && link.enabled,
+              enabled: forPersistence ? link.enabled : (upstream.enabled && link.enabled),
             };
           })
           .filter((v) => v && v.upstreamBase) as {
@@ -133,11 +138,11 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
         .filter((u) => !linkedUpstreamIds.has(u.id))
         .map((u, idx) => ({
           id: u.id,
-          label: u.label.trim() || null,
+          label: `${u.label.trim() || ""}::${u.enabled ? "1" : "0"}`,
           upstreamBase: u.upstreamBase.trim(),
           apiKey: u.apiKey.trim() || null,
           priority: idx,
-          enabled: u.enabled,
+          enabled: true, // 未关联的提供商没有路由链接，默认为 true
         }))
         .filter((u) => u.upstreamBase);
 
@@ -169,6 +174,22 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     };
 
     return cfg;
+  };
+
+  // 解析编码的 label，格式为 "label::enabled"
+  const parseEncodedLabel = (encodedLabel: string | null): { label: string; enabled: boolean } => {
+    if (!encodedLabel) {
+      return { label: "未命名提供商", enabled: true };
+    }
+    const lastIndex = encodedLabel.lastIndexOf("::");
+    if (lastIndex === -1) {
+      // 旧格式，没有编码 enabled 状态
+      return { label: encodedLabel || "未命名提供商", enabled: true };
+    }
+    const label = encodedLabel.substring(0, lastIndex) || "未命名提供商";
+    const enabledStr = encodedLabel.substring(lastIndex + 2);
+    const enabled = enabledStr === "1";
+    return { label, enabled };
   };
 
   const hydrateFromPersisted = (cfg: PersistedConfig) => {
@@ -203,13 +224,14 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     // 从真实服务中提取提供商和路由
     realServices.forEach((svc) => {
       svc.upstreams.forEach((up) => {
+        const { label, enabled: upstreamEnabled } = parseEncodedLabel(up.label);
         if (!upstreamMap.has(up.id)) {
           upstreamMap.set(up.id, {
             id: up.id,
-            label: up.label || "未命名提供商",
+            label,
             upstreamBase: up.upstreamBase,
             apiKey: up.apiKey || "",
-            enabled: up.enabled,
+            enabled: upstreamEnabled,
           });
         }
         routeMap[svc.id] = [
@@ -217,7 +239,7 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
           {
             id: makeId(),
             upstreamId: up.id,
-            enabled: up.enabled,
+            enabled: up.enabled, // 这是路由链接的 enabled 状态
             priority: typeof up.priority === "number" ? up.priority : 0,
           },
         ];
@@ -227,13 +249,14 @@ export function ProxyStoreProvider({ children }: { children: ReactNode }) {
     // 从 __unlinked__ 占位服务中恢复未关联的提供商
     if (unlinkedService) {
       unlinkedService.upstreams.forEach((up) => {
+        const { label, enabled: upstreamEnabled } = parseEncodedLabel(up.label);
         if (!upstreamMap.has(up.id)) {
           upstreamMap.set(up.id, {
             id: up.id,
-            label: up.label || "未命名提供商",
+            label,
             upstreamBase: up.upstreamBase,
             apiKey: up.apiKey || "",
-            enabled: up.enabled,
+            enabled: upstreamEnabled,
           });
         }
       });
